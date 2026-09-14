@@ -1,0 +1,30 @@
+name: ClanSync Automator
+
+on:
+  schedule:
+    - cron: '0 * * * *' # Se ejecuta en el minuto 0 de cada hora
+  workflow_dispatch: # Permite ejecutarlo manualmente desde GitHub
+
+jobs:
+  update-sheets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v3
+
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: |
+          pip install requests gspread oauth2client python-dotenv
+
+      - name: Ejecutar ClanSync
+        env:
+          COC_TOKEN: ${{ secrets.COC_TOKEN }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          CLAN_TAG: ${{ secrets.CLAN_TAG }}
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+        run: python main.py

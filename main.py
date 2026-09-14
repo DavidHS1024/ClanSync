@@ -2,7 +2,6 @@ import os
 import time
 import requests
 import gspread
-import schedule
 from dotenv import load_dotenv
 
 # Cargar variables de entorno
@@ -93,16 +92,5 @@ def actualizar_asaltos():
     else:
         print("No se generaron datos para actualizar.")
 
-def iniciar_servidor():
-    actualizar_asaltos()
-    
-    # Actualización en "falso tiempo real" (cada 1 hora)
-    schedule.every(1).hours.do(actualizar_asaltos)
-    
-    print("\nWorker de CapitalSync iniciado. Ejecución programada cada 1 hora...")
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
-
 if __name__ == "__main__":
-    iniciar_servidor()
+    actualizar_asaltos()
