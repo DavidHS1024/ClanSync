@@ -2,8 +2,17 @@ name: ClanSync Automator
 
 on:
   schedule:
-    - cron: '0 * * * *' # Se ejecuta en el minuto 0 de cada hora
-  workflow_dispatch: # Permite ejecutarlo manualmente desde GitHub
+    # Viernes: Desde las 06:00 UTC (01:00 AM Perú) hasta el final del día UTC
+    - cron: '0 6-23 * * 5'
+    
+    # Sábados y Domingos: Las 24 horas (00:00 a 23:00 UTC)
+    - cron: '0 * * * 6,0'
+    
+    # Lunes: Desde las 00:00 UTC hasta las 08:00 UTC (03:00 AM Perú). 
+    # Esta última ejecución a las 3 AM garantiza capturar los resultados finales post-evento.
+    - cron: '0 0-8 * * 1'
+    
+  workflow_dispatch:
 
 jobs:
   update-sheets:
