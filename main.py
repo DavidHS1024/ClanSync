@@ -59,7 +59,7 @@ def sincronizar_miembros(gc, headers):
         if not fila: continue
         
         # Rellenar columnas vacías para evitar errores de índice
-        while len(fila) < 5:
+        while len(fila) < 6:
             fila.append("")
             
         tag = fila[0]
@@ -85,12 +85,13 @@ def sincronizar_miembros(gc, headers):
                 mapa_rangos.get(jugador['role'], 'Miembro'),
                 str(jugador['townHallLevel']),
                 "Activo"
+                ""
             ]
             datos_db.append(nueva_fila)
             print(f"Alta detectada: {jugador['name']} agregado a la base de datos.")
             
     # 1.3 Inyectar actualización masiva a la DB
-    worksheet_db.update(values=datos_db, range_name=f"A1:E{len(datos_db)}")
+    worksheet_db.update(values=datos_db, range_name=f"A1:F{len(datos_db)}")
     print("¡Base de datos actualizada con éxito!")
 
 def actualizar_asaltos():
