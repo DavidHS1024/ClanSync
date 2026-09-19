@@ -17,7 +17,7 @@ else:
     CLAN_TAG = "%23" + CLAN_TAG
 
 def obtener_cliente_sheets():
-    """Función unificada para conectar a Google Sheets en Local o Nube"""
+    """Conecta a Google Sheets en Local o Nube"""
     google_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     if google_json:
         creds_dict = json.loads(google_json)
@@ -26,17 +26,16 @@ def obtener_cliente_sheets():
         return gspread.service_account(filename="google_credentials.json")
 
 def sincronizar_miembros(gc, headers):
-    """Actualiza la BD de Miembros: Soft Delete, Altas y Cambios de Rango"""
-    print("1. Sincronizando Base de Datos de Miembros...")
+    """Módulo 1: Actualiza BD de Miembros"""
+    print("\n--- 1. Sincronizando BD de Miembros ---")
     url = f"https://cocproxy.royaleapi.dev/v1/clans/{CLAN_TAG}"
     response = requests.get(url, headers=headers)
     
     if response.status_code != 200:
-        print(f"Error al obtener lista del clan: {response.status_code}")
+        print(f"Error al obtener clan: {response.status_code}")
         return
         
     datos_clan = response.json()
-    # Crear un diccionario rápido de la API
     miembros_api = {m['tag']: m for m in datos_clan.get('memberList', [])}
     
     mapa_rangos = {
@@ -49,16 +48,12 @@ def sincronizar_miembros(gc, headers):
     worksheet_db = gc.open_by_key(SHEET_ID).worksheet("DB_Miembros")
     datos_db = worksheet_db.get_all_values()
     
-    if not datos_db:
-        return
+    if not datos_db: return
         
     tags_en_db = {}
     
-    # 1.1 Mapear existentes: Actualizar rangos o aplicar Soft Delete
-    for i, fila in enumerate(datos_db[1:]): # Saltar el encabezado
+    for i, fila in enumerate(datos_db[1:]):
         if not fila: continue
-        
-        # Rellenar columnas vacías para evitar errores de índice
         while len(fila) < 6:
             fila.append("")
             
@@ -73,71 +68,33 @@ def sincronizar_miembros(gc, headers):
             fila[4] = "Activo"
         else:
             if fila[4] == "Activo":
-                fila[4] = "Salió" # Soft Delete
-                print(f"Baja detectada: {fila[1]} ha sido marcado como Salió.")
+                fila[4] = "Salió"
     
-    # 1.2 Detectar Altas: Agregar miembros completamente nuevos
     for tag, jugador in miembros_api.items():
         if tag not in tags_en_db:
-            nueva_fila = [
-                tag,
-                jugador['name'],
-                mapa_rangos.get(jugador['role'], 'Miembro'),
-                str(jugador['townHallLevel']),
-                "Activo"
-                ""
-            ]
-            datos_db.append(nueva_fila)
-            print(f"Alta detectada: {jugador['name']} agregado a la base de datos.")
+            datos_db.append([
+                tag, jugador['name'], mapa_rangos.get(jugador['role'], 'Miembro'), 
+                str(jugador['townHallLevel']), "Activo", ""
+            ])
             
-    # 1.3 Inyectar actualización masiva a la DB
     worksheet_db.update(values=datos_db, range_name=f"A1:F{len(datos_db)}")
     print("¡Base de datos actualizada con éxito!")
 
-def actualizar_asaltos():
-    """Flujo principal del script ETL"""
-    headers = {
-        "Authorization": f"Bearer {COC_TOKEN}",
-        "Accept": "application/json"
-    }
+def sincronizar_asaltos(gc, headers):
+    """Módulo 2: Actualiza Asaltos de la Capital"""
+    print("\n--- 2. Sincronizando Asaltos de la Capital ---")
+    url = f"https://cocproxy.royaleapi.dev/v1/clans/{CLAN_TAG}/capitalraidseasons"
+    response = requests.get(url, headers=headers)
     
-    try:
-        gc = obtener_cliente_sheets()
-    except Exception as e:
-        print(f"Error crítico al conectar con Google Sheets: {e}")
-        return
-        
-    # Fase 1: Auditar y emparejar la base de datos
-    sincronizar_miembros(gc, headers)
-    
-    # Pausa de ingeniería: Google Sheets tarda ~2 segundos en recalcular 
-    # las fórmulas FILTER después de que inyectamos los nuevos miembros.
-    print("Esperando 3 segundos para el recálculo de fórmulas de Sheets...")
-    time.sleep(3)
-    
-    # Fase 2: Sincronizar Asaltos
-    print("2. Iniciando extracción de datos de Asaltos de la Capital...")
-    url_raids = f"https://cocproxy.royaleapi.dev/v1/clans/{CLAN_TAG}/capitalraidseasons"
-    response = requests.get(url_raids, headers=headers)
-    
-    if response.status_code != 200:
-        print(f"Error en API de Asaltos: {response.status_code}")
-        return
+    if response.status_code != 200: return
         
     data = response.json()
     latest_season = data['items'][0]
     
-    raid_stats = {}
-    for member in latest_season.get('members', []):
-        raid_stats[member['tag']] = {
-            'ataques': member['attacks'],
-            'oro': member['capitalResourcesLooted']
-        }
+    raid_stats = {m['tag']: {'ataques': m['attacks'], 'oro': m['capitalResourcesLooted']} 
+                  for m in latest_season.get('members', [])}
         
-    sheet = gc.open_by_key(SHEET_ID)
-    worksheet_asaltos = sheet.worksheet("Asaltos_Capital")
-    
-    # Extraer la lista dinámica generada por el FILTER (Alineación perfecta)
+    worksheet_asaltos = gc.open_by_key(SHEET_ID).worksheet("Asaltos_Capital")
     tags_en_hoja = worksheet_asaltos.col_values(1)
     nuevos_datos = []
     
@@ -150,7 +107,77 @@ def actualizar_asaltos():
     if nuevos_datos:
         rango = f"C2:D{len(tags_en_hoja)}"
         worksheet_asaltos.update(values=nuevos_datos, range_name=rango)
-        print(f"¡Éxito! Asaltos actualizados en el rango {rango}.")
+        print("¡Éxito! Asaltos actualizados.")
+
+def sincronizar_guerra(gc, headers):
+    """Módulo 3: Actualiza Guerra de Clanes"""
+    print("\n--- 3. Sincronizando Guerra Actual ---")
+    url = f"https://cocproxy.royaleapi.dev/v1/clans/{CLAN_TAG}/currentwar"
+    response = requests.get(url, headers=headers)
+    
+    worksheet_guerra = gc.open_by_key(SHEET_ID).worksheet("Guerra_Actual")
+    
+    if response.status_code != 200:
+        print("API de Guerra bloqueada (Registro de guerra oculto) o error de conexión.")
+        return
+        
+    data = response.json()
+    estado = data.get('state', 'notInWar')
+    
+    # Si no hay guerra, vaciamos las columnas de datos (dejando la B intacta para no borrar tu fórmula)
+    if estado == 'notInWar':
+        print("El clan no está en guerra. Limpiando tablero...")
+        worksheet_guerra.batch_clear(["A2:A60", "C2:E60"])
+        return
+        
+    print(f"Estado de la guerra: {estado.upper()}")
+    
+    miembros_guerra = data.get('clan', {}).get('members', [])
+    # Ordenamos a los jugadores por su número de mapa (1, 2, 3...)
+    miembros_guerra.sort(key=lambda x: x.get('mapPosition', 99))
+    
+    tags = []
+    stats = []
+    
+    for miembro in miembros_guerra:
+        tag = miembro['tag']
+        ataques_lista = miembro.get('attacks', [])
+        
+        # Calcular totales
+        ataques_realizados = len(ataques_lista)
+        estrellas = sum(atk['stars'] for atk in ataques_lista)
+        destruccion = sum(atk['destructionPercentage'] for atk in ataques_lista)
+        
+        tags.append([tag])
+        stats.append([ataques_realizados, estrellas, destruccion])
+        
+    # Limpiamos los datos anteriores antes de insertar los nuevos
+    worksheet_guerra.batch_clear(["A2:A60", "C2:E60"])
+    
+    # Inyectamos en dos bloques separados para saltarnos la columna B (donde está tu fórmula)
+    if tags:
+        worksheet_guerra.update(values=tags, range_name=f"A2:A{len(tags)+1}")
+        worksheet_guerra.update(values=stats, range_name=f"C2:E{len(stats)+1}")
+        print(f"¡Éxito! Plantilla de {len(tags)} jugadores en guerra inyectada.")
+
+def flujo_principal():
+    """Controlador que ejecuta todo secuencialmente"""
+    headers = {
+        "Authorization": f"Bearer {COC_TOKEN}",
+        "Accept": "application/json"
+    }
+    
+    try:
+        gc = obtener_cliente_sheets()
+    except Exception as e:
+        print(f"Error crítico de conexión a Google Sheets: {e}")
+        return
+        
+    sincronizar_miembros(gc, headers)
+    time.sleep(3) # Pausa para que Sheets recalcule fórmulas
+    sincronizar_asaltos(gc, headers)
+    sincronizar_guerra(gc, headers)
+    print("\n--- SINCRONIZACIÓN COMPLETADA ---")
 
 if __name__ == "__main__":
-    actualizar_asaltos()
+    flujo_principal()
