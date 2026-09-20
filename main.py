@@ -110,55 +110,83 @@ def sincronizar_asaltos(gc, headers):
         print("¡Éxito! Asaltos actualizados.")
 
 def sincronizar_guerra(gc, headers):
-    """Módulo 3: Actualiza Guerra de Clanes"""
+    """Módulo 3: Actualiza Guerra con Historial Dinámico"""
     print("\n--- 3. Sincronizando Guerra Actual ---")
     url = f"https://cocproxy.royaleapi.dev/v1/clans/{CLAN_TAG}/currentwar"
     response = requests.get(url, headers=headers)
     
-    worksheet_guerra = gc.open_by_key(SHEET_ID).worksheet("Guerra_Actual")
-    
-    if response.status_code != 200:
-        print("API de Guerra bloqueada (Registro de guerra oculto) o error de conexión.")
+    if response.status_code != 200: 
         return
         
     data = response.json()
     estado = data.get('state', 'notInWar')
     
-    # Si no hay guerra, vaciamos las columnas de datos (dejando la B intacta para no borrar tu fórmula)
-    if estado == 'notInWar':
-        print("El clan no está en guerra. Limpiando tablero...")
-        worksheet_guerra.batch_clear(["A2:A60", "C2:E60"])
+    # 1. EVITAR BORRAR EN PREPARACIÓN
+    if estado in ['notInWar', 'preparation']:
+        print(f"Estado: {estado}. Congelando historial (No hay ataques nuevos).")
         return
         
-    print(f"Estado de la guerra: {estado.upper()}")
+    # Generar Identificador Único (Fecha de término, ej: "20260920T1530")
+    end_time_raw = data.get('endTime', 'Desconocido')
+    war_id = f"Fin:{end_time_raw[:13]}" 
     
-    miembros_guerra = data.get('clan', {}).get('members', [])
-    # Ordenamos a los jugadores por su número de mapa (1, 2, 3...)
-    miembros_guerra.sort(key=lambda x: x.get('mapPosition', 99))
+    worksheet_guerra = gc.open_by_key(SHEET_ID).worksheet("Guerra_Actual")
+    all_data = worksheet_guerra.get_all_values()
     
-    tags = []
-    stats = []
-    
-    for miembro in miembros_guerra:
-        tag = miembro['tag']
-        ataques_lista = miembro.get('attacks', [])
+    if len(all_data) < 2: return
         
-        # Calcular totales
-        ataques_realizados = len(ataques_lista)
-        estrellas = sum(atk['stars'] for atk in ataques_lista)
-        destruccion = sum(atk['destructionPercentage'] for atk in ataques_lista)
-        
-        tags.append([tag])
-        stats.append([ataques_realizados, estrellas, destruccion])
-        
-    # Limpiamos los datos anteriores antes de insertar los nuevos
-    worksheet_guerra.batch_clear(["A2:A60", "C2:E60"])
+    headers_hoja = all_data[0]
     
-    # Inyectamos en dos bloques separados para saltarnos la columna B (donde está tu fórmula)
-    if tags:
-        worksheet_guerra.update(values=tags, range_name=f"A2:A{len(tags)+1}")
-        worksheet_guerra.update(values=stats, range_name=f"C2:E{len(stats)+1}")
-        print(f"¡Éxito! Plantilla de {len(tags)} jugadores en guerra inyectada.")
+    # Verificar si es una guerra nueva comparando la celda C1
+    es_guerra_nueva = False
+    if len(headers_hoja) < 3 or war_id not in headers_hoja[2]:
+        es_guerra_nueva = True
+        
+    miembros_guerra = {m['tag']: m for m in data.get('clan', {}).get('members', [])}
+    nuevos_datos_cde = []
+    
+    # 2. PROCESAR DATOS CON ALINEACIÓN PERFECTA (Mapeo 1:1 con las filas)
+    for i in range(1, len(all_data)):
+        tag = all_data[i][0]
+        if not tag:
+            nuevos_datos_cde.append(["", "", ""])
+            continue
+            
+        if tag in miembros_guerra:
+            ataques_lista = miembros_guerra[tag].get('attacks', [])
+            ataques = len(ataques_lista)
+            estrellas = sum(atk['stars'] for atk in ataques_lista)
+            destr = sum(atk['destructionPercentage'] for atk in ataques_lista)
+            nuevos_datos_cde.append([ataques, estrellas, destr])
+        else:
+            # Jugador en la BD pero no participa en esta guerra
+            nuevos_datos_cde.append(["-", "-", "-"])
+            
+    # Encabezados con salto de línea para que se vea elegante en Sheets
+    encabezados_cde = [[f"Ataques\n{war_id}", f"Estrellas\n{war_id}", f"Destr.\n{war_id}"]]
+    
+    # 3. EL DESPLAZAMIENTO HORIZONTAL (Historial)
+    if es_guerra_nueva:
+        print(f"Nueva guerra detectada ({war_id}). Empujando historial a la derecha...")
+        matriz_actualizada = []
+        
+        # Juntar nuevos encabezados con los antiguos
+        encabezados_historicos = headers_hoja[2:] if len(headers_hoja) > 2 else []
+        matriz_actualizada.append(encabezados_cde[0] + encabezados_historicos)
+        
+        # Juntar nuevos datos con los datos históricos fila por fila
+        for i, nueva_fila_cde in enumerate(nuevos_datos_cde):
+            fila_historica = all_data[i+1][2:] if len(all_data[i+1]) > 2 else []
+            matriz_actualizada.append(nueva_fila_cde + fila_historica)
+            
+        # Inyectar toda la matriz masiva empezando desde C1
+        worksheet_guerra.update(values=matriz_actualizada, range_name="C1")
+    else:
+        print("Día de batalla en curso. Actualizando ataques...")
+        # Si es la misma guerra, solo sobreescribimos C, D y E para no saturar internet
+        worksheet_guerra.update(values=nuevos_datos_cde, range_name=f"C2:E{len(nuevos_datos_cde)+1}")
+        
+    print("¡Historial de guerra sincronizado!")
 
 def flujo_principal():
     """Controlador que ejecuta todo secuencialmente"""
